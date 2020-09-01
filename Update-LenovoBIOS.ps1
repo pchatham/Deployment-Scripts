@@ -1,4 +1,4 @@
-﻿<#	
+<#	
 	.NOTES
 	===========================================================================
 	 Created on:   	01/09/2020
@@ -7,6 +7,11 @@
 	===========================================================================
 	.DESCRIPTION
 		Updates Lenovo BIOS based on current detected firmware version
+
+	.NOTES
+		Create a folder for each hardware model and add it under the "MODIFY HARDWARE LIST" section
+		Added Example hardware models
+		Adapted from VB script from windowstech.net https://windowstech.net/lenovo-bios-update-script
 #>
 
 #region function Write-Log
@@ -200,7 +205,3 @@ If ($Model -eq "THINKPAD_P50" -and $BIOSversion -lt "N1EET88W") {
 #endregion Desktop
 
 #endregion MODIFY HARDWARE LIST
-
-
-
-
