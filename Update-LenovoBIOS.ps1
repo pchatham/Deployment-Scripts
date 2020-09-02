@@ -9,9 +9,12 @@
 		Updates Lenovo BIOS based on current detected firmware version
 
 	.NOTES
-		Create a folder for each hardware model and add it under the "MODIFY HARDWARE LIST" section
-		Added Example hardware models
+		Add this script to root of extracted Lenovo BIOS update folder.
+		Create package for SCCM / MDT (if required)
 		Adapted from VB script from windowstech.net https://windowstech.net/lenovo-bios-update-script
+		
+	.USAGE
+	    powershell.exe -executionpolicy bypass -file "Update-LenovoBIOS.ps1"
 #>
 
 #region function Write-Log
@@ -68,42 +71,32 @@ function Write-log {
 
 #region function Execute-BIOSupdate
 function Execute-BIOSupdate {
-	[CmdletBinding()]
 	param
 	(
-		[Parameter(Mandatory = $true)]
-		[ValidateNotNullOrEmpty()]
-		[Alias('F')]
-		[string]
-		$FolderName
+		[Parameter(Position = 1)]
+		[ValidateSet('winuptp', 'Flash', IgnoreCase = $true)]
+		[Alias('u')]
+		$updateType
 	)
 	
-	# determine update type (flash/winuptp)
-	If (Test-Path "$($PSScriptRoot)\$($FolderName)\flash.cmd") {
-		$uType = 'Flash'
-		Write-Log "Update Type : $($uType)"
-	}
-	If (Test-Path "$($PSScriptRoot)\$($FolderName)\winuptp.exe") {
-		$uType = 'winuptp'
-		Write-Log "Update Type : $($uType)"
-		Write-Log "=============================="
-	}
-	switch ($uType) {
+	switch ($updateType) {
 		'Flash' {
-			$cmdPath = "$($PSScriptRoot)\$($FolderName)\flash.cmd"
+			$cmdPath = "$($currentDir)\flash.cmd"
 			$args = "/quiet /sccm"
 		}
 		'winuptp' {
-			$cmdPath = "$($PSScriptRoot)\$($FolderName)\winuptp.exe"
+			$cmdPath = "$($currentDir)\winuptp.exe"
 			$args = '-s'
 		}
 	}
 	
-	if (Test-Path "$($PSScriptRoot)\$($FolderName)\phlash.ini") {
+	Write-Log "Executing BIOS Update with [$($updateType)] updater"
+	
+	if (Test-Path "$($currentDir)\phlash.ini") {
 		Write-Log "Removing 'phlash.ini'`r" -Type Warning
-		Remove-Item "$($PSScriptRoot)\$($FolderName)\phlash.ini"
+		Remove-Item "$($currentDir)\phlash.ini"
 	}
-		
+	
 	#execute Update
 	Write-Log "EXECUTING : $($cmdPath) $($args)" -Type Warning
 	Start-Process $cmdPath -ArgumentList $args -WindowStyle Hidden -Wait
@@ -115,6 +108,7 @@ function Execute-BIOSupdate {
 # Current Directory
 $currentDir = $PSScriptRoot
 Write-Log "Current Directory : $($currentDir)"
+Write-Output "Current Directory : $($currentDir)"
 # Loading the COM object for the TS Environment, this is to read / write to TS Variables
 $tsenv = New-Object -COMObject Microsoft.SMS.TSEnvironment
 
@@ -148,6 +142,7 @@ else {
 #region Gather Hardware Info
 $HardwareInfo = Get-CimInstance -ClassName Win32_ComputerSystemProduct
 $BIOSInfo = Get-CimInstance -ClassName Win32_BIOS
+$PowerOnline = (Get-CimInstance -ClassName BatteryStatus -Namespace root/wmi).PowerOnline
 
 $Model = $HardwareInfo.Version
 $BIOSversion = $BIOSInfo.SMBIOSBIOSVersion.Substring(0, $BIOSInfo.SMBIOSBIOSVersion.Length - 8)
@@ -156,7 +151,12 @@ Write-Log "=============================="
 Write-Log "MAKE : $($HardwareInfo.Vendor)"
 Write-Log "MODEL : $($Model)"
 Write-Log "BIOS Version : $BIOSversion"
+Write-Log "Power Online : $($PowerOnline)"
 Write-Log "==============================`r`r"
+
+if (!($PowerOnline)) {
+	Write-Log "NO AC POWER DETECTED. UPDATE MAY NOT EXECUTE" -Type Warning
+}
 
 if ($($HardwareInfo.Vendor) -ne 'LENOVO') {
 	Write-Log -Type Error "NOT A LENOVO DEVICE"
@@ -165,43 +165,74 @@ if ($($HardwareInfo.Vendor) -ne 'LENOVO') {
 }
 #endregion Gather
 
-#region MODIFY HARDWARE LIST
-
-#region Laptops
-
-# Thinkpad T480
-If ($Model -eq "THINKPAD T480" -and $BIOSversion -lt "N24ET59W") {
-	
-	Execute-BIOSupdate -FolderName 'T480'
+#region Determine if WINUPTP or FLASH Updater
+if (Get-ChildItem -Path $currentDir -File winuptp.exe) {
+	Write-Log "Found Winuptp.exe updater"
+	$updateType = 'winuptp'
 }
+elseif (Get-ChildItem -Path $currentDir -File Flash.cmd) {
+	Write-Log "Found Flash.cmd updater"
+	$updateType = 'Flash'
+}
+#endregion Determine if WINUPTP or FLASH Updater
 
-# ThinkPad T490
-If ($Model -eq "THINKPAD T490") {
-	
-	if ($BIOSversion -lt "N2IET71W") {
-		Execute-BIOSupdate -FolderName 'T490_1'
-		# 1.12 must be applied before any later version Setting Var to tell TS to update again
-		$tsenv.Value("BIOS2REQ") = "TRUE" # Set this in TS as condition
+#region WINUPTP Logic for Version comparison
+if ($updateType -eq 'winuptp') {
+	$updateFolder = Get-ChildItem -Path $($currentDir) | Where-Object -Property Name -Like $BIOSversion
+	if (Test-Path -Path $updateFolder) {
+		$updateVersion = $($updateFolder.Name)
+		Write-Log "Current BIOS Version : $($BIOSversion)"
+		Write-Log "Update Folder BIOS Version : $($updateVersion)"
+		
+		if ($BIOSversion -lt $updateVersion) {
+			
+			Write-Log "Update Required" -Type Warning
+			$updateRequired = $true
+		}
+		else {
+			Write-Log "Update NOT Required" -Type Warning
+			$updateRequired = $false
+		}
+		
 	}
-	elseif ($BIOSversion -lt "N2IET90W") {
-		Execute-BIOSupdate -FolderName 'T490_1'
+	else {
+		Write-Log "Unable to find update folder" -Type Error
+		Break
 	}
 }
+#endregion WINUPTP Logic for Version comparison
 
-# ThinkPad X390
-	If ($Model -eq "THINKPAD X390" -and $BIOSversion -lt "N2JET89W") {
-		Execute-BIOSupdate -FolderName "X390"
+#region FLASH Logic for Version comparison
+if ($updateType -eq 'Flash') {
+	if (Test-Path -Path "$($currentDir)\Changes.txt") {
+		Write-Log "Found 'Changes.txt'"
+		Write-Log "Parsing file for latest update.."
+		$updateFile = Get-Content -Path "$($currentDir)\Changes.txt" | Select-String -SimpleMatch "CHANGES for" | Select-Object -First 1
+		$updateVersion = $updateFile.Substring($updateVersion.Length - 8)
+		
+		Write-Log "Update Folder BIOS Version : $($updateVersion)" -Type Warning
+		Write-Log "Current BIOS Version : $($BIOSversion)" -Type Warning
+		
+		if ($BIOSversion -lt $updateVersion) {
+			
+			Write-Log "Update Required" -Type Warning
+			$updateRequired = $true
+		}
+		else {
+			Write-Log "Update NOT Required" -Type Warning
+			$updateRequired = $false
+		}
+	}
+	else {
+		Write-Log "Unable to find update 'Changes.txt'" -Type Error
+		Break
+	}
 }
+#endregion FLASH Logic for Version comparison
 
-# ThinkPad P50
-If ($Model -eq "THINKPAD_P50" -and $BIOSversion -lt "N1EET88W") {
-	Execute-BIOSupdate -FolderName 'P50' 
+#region Execute Update
+if ($updateRequired) {
+	Write-Log "Begining BIOS Upate"
+	Execute-BIOSupdate -updateType $updateType
 }
-
-#endregion Laptops	
-
-#region Desktop
-# Add desktop models here
-#endregion Desktop
-
-#endregion MODIFY HARDWARE LIST
+#endregion Execute Update
