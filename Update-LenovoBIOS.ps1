@@ -17,6 +17,8 @@
 	    powershell.exe -executionpolicy bypass -file "Update-LenovoBIOS.ps1"
 #>
 
+#Requires -RunAsAdministrator
+
 #region function Write-Log
 # Writes a cmtrace compatible Log file
 function Write-log {
